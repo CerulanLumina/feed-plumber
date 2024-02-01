@@ -1,0 +1,9 @@
+[workspace]
+members = [
+    "sys-feed-plumber-plugin",
+    "sample-plugin",
+    "feed-plumber-plugin-rs",
+    "feed-plumber-service"
+]
+resolver = "2"
+

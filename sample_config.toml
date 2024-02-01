@@ -1,0 +1,64 @@
+# How often to check source schedules, in milliseconds. (Optional)
+time_between_ticks = 60000 # By default checks the schedule 1/min (60000 ms).
+
+# ===============================================================
+# Sources
+#
+# Sources are polled on a schedule that is defined here and occasionally emit items (an item is a list of key-value pairs.)
+# They are emitted to processors or directly to sinks with the `pipe` property.
+
+[[sources]]
+# The name of this source.
+name = "Rust Blog"
+
+# A CRON-syntax schedule defining how often to poll for new items.
+# This schedule will be checked vs the current time every `tick_rate` ms.
+schedule = "0 0 10 * * * *" # Once a day at 10:00
+
+# `type` defines which type of source to use. Types are provided by plugins.
+type = "feed" # Atom / RSS
+
+# Other properties can be read by plugins. (The entire source object is passed to them for reading)
+feed = "https://blog.rust-lang.org/feed.xml" # Which feed to read
+
+# `pipe` defines where the emitted items go. They can go to processors (or a stream of processors) then to a sink,
+# or just directly to a sink.
+# Syntax: `(${processor}->)*(${sink})`
+pipe = ["console", "feed-discord-processor->discord-webhook"] # Output to the console, and to a discord webhook
+                                                      # (after processed by the feed-discord-processor processor)
+
+[[sources]]
+name = "xkcd"
+
+# Mondays, Wednesdays, Fridays at 09:00
+schedule = "0 0 9 * * Mon,Wed,Fri *"
+
+type = "feed"
+feed = "https://xkcd.com/atom.xml"
+pipe = ["feed-discord-processor->discord-webhook"]
+
+# ===============================================================
+# Sinks
+#
+# Sinks receive items and do stuff with them.
+
+[[sinks]]
+# See sources for explanations of these properties
+name = "console"
+type = "console"
+
+[[sinks]]
+name = "Discord Webhook"
+type = "discord-webhook"
+url = "https://discord.com/api/webhooks/0000000000000000000/123456789abcd-efghijklmnopqrstuvwxyz-13581321345589144233377610987CL"
+
+# ===============================================================
+# Processors
+#
+# Processors convert between different streams of data. For example, an RSS source might emit a list of key-value
+# pairs containing the title, date, description, etc, while the disord-webhook sink expects a single pair: (json="${message_json}")
+
+[[processors]]
+name = "feed-discord-proceessor"
+type = "discord-feed"
+replace_username = true

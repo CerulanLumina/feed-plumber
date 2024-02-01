@@ -1,0 +1,23 @@
+[package]
+name = "feed-plumber-service"
+version = "0.1.0"
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+chrono = { version = "0.4.33", features = ["serde"] }
+clap = { version = "4.4.18", features = ["derive"] }
+cron = "0.12.0"
+derive_more = "0.99.17"
+nom = "7.1.3"
+serde = { version = "1.0.196", features = ["derive"] }
+toml = "0.8.8"
+
+sys-feed-plumber-plugin = { path = "../sys-feed-plumber-plugin" }
+libloading = "0.8.1"
+tap = "1.0.1"
+log = "0.4.20"
+pretty_env_logger = "0.5.0"
+anyhow = "1.0.79"
+crossbeam = "0.8.4"
