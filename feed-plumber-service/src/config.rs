@@ -80,7 +80,7 @@ impl From<ParsedSchedule> for String {
 
 impl Display for ParsedSchedule {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        f.write_str(self.to_string().as_str())
+        f.write_str(self.0.to_string().as_str())
     }
 }
 
