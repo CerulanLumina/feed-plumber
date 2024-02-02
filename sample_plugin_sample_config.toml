@@ -1,0 +1,13 @@
+time_between_ticks = 250
+
+[[sources]]
+name = "my-counter-source"
+type = "counter"
+schedule = "* * * * * * *"
+pipe = ["my-console-sink"]
+key_name = "asdasd"
+
+[[sinks]]
+name = "my-console-sink"
+type = "console"
+prefix = "::"

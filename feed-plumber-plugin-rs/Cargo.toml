@@ -5,6 +5,12 @@ edition = "2021"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
+[features]
+default = ["deserialize"]
+deserialize = ["serde", "toml"]
+
 [dependencies]
 sys-feed-plumber-plugin = { path = "../sys-feed-plumber-plugin" }
 cstr = "0.2.11"
+serde = {version = "1.0.196", optional = true, features = ["derive"]}
+toml = {version = "0.8.9", optional = true}

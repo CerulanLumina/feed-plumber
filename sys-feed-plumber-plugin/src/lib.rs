@@ -53,6 +53,8 @@ pub struct FeedPlumberPlugin {
     pub sources_len: usize,
     pub sinks: *const FeedPlumberSinkMeta,
     pub sinks_len: usize,
+    pub processors: *const FeedPlumberProcessorMeta,
+    pub processors_len: usize,
 }
 unsafe impl Sync for FeedPlumberPlugin {}
 unsafe impl Send for FeedPlumberPlugin {}
@@ -71,4 +73,12 @@ pub struct FeedPlumberSinkMeta {
     pub name: StaticString,
     pub create: unsafe extern "C" fn(*const c_char) -> *mut c_void,
     pub sink_items: unsafe extern "C" fn(*mut c_void, Items),
+}
+
+#[repr(C)]
+#[derive(Copy, Clone)]
+pub struct FeedPlumberProcessorMeta {
+    pub name: StaticString,
+    pub create: unsafe extern "C" fn(*const c_char) -> *mut c_void,
+    pub process_items: unsafe extern "C" fn(*mut c_void, Items) -> Items,
 }

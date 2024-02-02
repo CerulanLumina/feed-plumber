@@ -10,3 +10,4 @@ crate-type = ["cdylib"]
 
 [dependencies]
 feed-plumber-plugin-rs = { path = "../feed-plumber-plugin-rs" }
+serde = { version = "1.0.196", features = ["derive"] }
