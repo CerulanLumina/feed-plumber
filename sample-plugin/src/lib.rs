@@ -1,9 +1,13 @@
-use feed_plumber_plugin_rs::{feed_plumber_plugin, FeedPlumberSink, FeedPlumberSource};
+use feed_plumber_plugin_rs::{
+    feed_plumber_plugin, toml::Value, FeedPlumberProcessor, FeedPlumberSink, FeedPlumberSource,
+};
 use serde::Deserialize;
+use std::collections::HashMap;
 
 feed_plumber_plugin! {
     sources: "counter" => CounterSource;
     sinks: "console" => ConsoleSink;
+    processors: "keymap" => KeyMapProcessor;
 }
 
 #[derive(Deserialize, Default)]
@@ -71,5 +75,38 @@ impl FeedPlumberSink for ConsoleSink {
             println!("{:-<30}", "-");
             self.sequence += 1;
         }
+    }
+}
+
+struct KeyMapProcessor {
+    from: String,
+    to: String,
+}
+
+impl FeedPlumberProcessor for KeyMapProcessor {
+    type ConfigType = HashMap<String, Value>;
+
+    fn new(config: Self::ConfigType) -> Self {
+        let from = config.get("from_key").unwrap().as_str().unwrap().to_owned();
+        let to = config.get("to_key").unwrap().as_str().unwrap().to_owned();
+        Self { from, to }
+    }
+
+    fn process_items(&mut self, items: Vec<Vec<(&str, &str)>>) -> Vec<Vec<(String, String)>> {
+        items
+            .into_iter()
+            .map(|item| {
+                item.into_iter()
+                    .map(|(key, value)| {
+                        let key = if key == self.from.as_str() {
+                            self.to.clone()
+                        } else {
+                            key.to_owned()
+                        };
+                        (key, value.to_owned())
+                    })
+                    .collect()
+            })
+            .collect()
     }
 }

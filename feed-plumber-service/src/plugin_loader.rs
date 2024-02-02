@@ -6,7 +6,7 @@ use tap::{Tap, TapFallible, TapOptional};
 
 use sys_feed_plumber_plugin::{InitializationFunction, INITIALIZATION_FUNCTION_NAME};
 
-use crate::sys::{Plugin, PluginSinkInstance, PluginSourceInstance};
+use crate::sys::{Plugin, PluginProcessorInstance, PluginSinkInstance, PluginSourceInstance};
 
 pub struct PluginManager {
     plugins: Vec<Plugin>,
@@ -116,11 +116,35 @@ impl PluginManager {
         })
     }
 
+    pub fn instantiate_processor(
+        &self,
+        r#type: &str,
+        name: String,
+        config: &str,
+    ) -> Option<PluginProcessorInstance> {
+        let plugin = self
+            .plugins
+            .iter()
+            .find(|plugin| plugin.supplies_processor(r#type))?;
+        plugin
+            .instantiate_processor(r#type, name, config)
+            .tap_none(|| {
+                error!(
+                "Plugin declared processor \"{}\" was available but was not able to instantiate.",
+                r#type
+            )
+            })
+    }
+
     pub fn source_available(&self, r#type: &str) -> bool {
         self.plugins.iter().any(|a| a.supplies_source(r#type))
     }
 
     pub fn sink_available(&self, r#type: &str) -> bool {
         self.plugins.iter().any(|a| a.supplies_sink(r#type))
+    }
+
+    pub fn processor_available(&self, r#type: &str) -> bool {
+        self.plugins.iter().any(|a| a.supplies_processor(r#type))
     }
 }

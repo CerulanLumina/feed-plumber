@@ -1,4 +1,5 @@
 use std::{
+    cell::OnceCell,
     collections::HashMap,
     ffi::{c_void, CStr, CString},
     fmt::{Debug, Formatter},
@@ -10,14 +11,15 @@ use log::{debug, warn};
 use tap::TapFallible;
 
 use sys_feed_plumber_plugin::{
-    FeedPlumberPlugin, FeedPlumberSinkMeta, FeedPlumberSourceMeta, Item, Items as ItemsRaw,
-    KeyValuePair,
+    FeedPlumberPlugin, FeedPlumberProcessorMeta, FeedPlumberSinkMeta, FeedPlumberSourceMeta, Item,
+    Items as ItemsRaw, KeyValuePair,
 };
 
 #[allow(dead_code)]
 pub struct Plugin {
     sources: HashMap<String, PluginSourceMeta>,
     sinks: HashMap<String, PluginSinkMeta>,
+    processors: HashMap<String, PluginProcessorMeta>,
     inner: FeedPlumberPlugin,
 }
 
@@ -37,6 +39,9 @@ impl Plugin {
         Self {
             sources: Self::sources(&raw).map(|a| (a.name.clone(), a)).collect(),
             sinks: Self::sinks(&raw).map(|a| (a.name.clone(), a)).collect(),
+            processors: Self::processors(&raw)
+                .map(|a| (a.name.clone(), a))
+                .collect(),
             inner: raw,
         }
     }
@@ -63,6 +68,17 @@ impl Plugin {
             .map(|a| a.instantiate_new(name, config))
     }
 
+    pub fn instantiate_processor(
+        &self,
+        r#type: &str,
+        name: String,
+        config: &str,
+    ) -> Option<PluginProcessorInstance> {
+        self.processors
+            .get(r#type)
+            .map(|a| a.instantiate_new(name, config))
+    }
+
     pub fn supplies_source(&self, src: &str) -> bool {
         self.sources.contains_key(src)
     }
@@ -71,8 +87,13 @@ impl Plugin {
         self.sinks.contains_key(sink)
     }
 
+    pub fn supplies_processor(&self, processor: &str) -> bool {
+        self.processors.contains_key(processor)
+    }
+
     fn sources(plugin: &FeedPlumberPlugin) -> impl Iterator<Item = PluginSourceMeta> {
-        let sources_slice = slice_from_ptr(plugin.sources, plugin.sources_len);
+        // Safety: We are relying on FFI to be good, but sources_len corresponds to sources
+        let sources_slice = unsafe { slice_from_ptr(plugin.sources, plugin.sources_len) };
         debug!("registering {} sources", sources_slice.len());
         sources_slice
             .iter()
@@ -91,7 +112,8 @@ impl Plugin {
     }
 
     fn sinks(plugin: &FeedPlumberPlugin) -> impl Iterator<Item = PluginSinkMeta> {
-        let sinks_slice = slice_from_ptr(plugin.sinks, plugin.sinks_len);
+        // Safety: We are relying on FFI to be good, but sinks_len corresponds to sinks
+        let sinks_slice = unsafe { slice_from_ptr(plugin.sinks, plugin.sinks_len) };
         sinks_slice
             .iter()
             .filter_map(|a| {
@@ -106,9 +128,27 @@ impl Plugin {
                 inner: *inner,
             })
     }
+
+    fn processors(plugin: &FeedPlumberPlugin) -> impl Iterator<Item = PluginProcessorMeta> {
+        // Safety: We are relying on FFI to be good, but processors_len corresponds to processors
+        let processors_slice = unsafe { slice_from_ptr(plugin.processors, plugin.processors_len) };
+        processors_slice
+            .iter()
+            .filter_map(|a| {
+                a.name
+                    .as_cstr()
+                    .to_str()
+                    .ok()
+                    .map(|name| (a, name.to_owned()))
+            })
+            .map(|(inner, name)| PluginProcessorMeta {
+                name,
+                inner: *inner,
+            })
+    }
 }
 
-fn slice_from_ptr<'a, T>(ptr: *const T, mut len: usize) -> &'a [T] {
+unsafe fn slice_from_ptr<'a, T>(ptr: *const T, mut len: usize) -> &'a [T] {
     let ptr = if len > 0 && !ptr.is_null() {
         ptr
     } else {
@@ -117,7 +157,7 @@ fn slice_from_ptr<'a, T>(ptr: *const T, mut len: usize) -> &'a [T] {
     };
     // Safety: we checked that the ptr is not null (or if it is, we are using zero-length slice),
     // and that we are properly aligned if slice is zero-length.
-    unsafe { from_raw_parts(ptr, len) }
+    from_raw_parts(ptr, len)
 }
 
 pub struct PluginSourceMeta {
@@ -199,6 +239,50 @@ impl PluginSinkInstance {
         items.with_raw(|items| {
             self.sink_items_raw(items);
         });
+    }
+}
+
+pub struct PluginProcessorMeta {
+    pub name: String,
+    inner: FeedPlumberProcessorMeta,
+}
+
+impl PluginProcessorMeta {
+    pub fn instantiate_new(&self, name: String, config: &str) -> PluginProcessorInstance {
+        let config = CString::new(config).unwrap();
+        // Safety: FFI
+        let handle = unsafe { (self.inner.create)(config.as_ptr()) };
+        drop(config); // Ensures config lives at least as long as FFI
+        PluginProcessorInstance {
+            name,
+            handle,
+            meta: self.inner,
+        }
+    }
+}
+
+pub struct PluginProcessorInstance {
+    name: String,
+    handle: *mut c_void,
+    meta: FeedPlumberProcessorMeta,
+}
+
+impl PluginProcessorInstance {
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+    fn process_items_raw(&mut self, items: ItemsRaw) -> ItemsRaw {
+        // Safety: FFI
+        unsafe { (self.meta.process_items)(self.handle, items) }
+    }
+
+    pub fn process_items(&mut self, items: &Items) -> Items {
+        let cell = OnceCell::new();
+        items.with_raw(|items| {
+            let items = self.process_items_raw(items);
+            cell.set(Items::from_raw(items)).ok().unwrap();
+        });
+        cell.into_inner().unwrap()
     }
 }
 

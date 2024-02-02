@@ -4,10 +4,16 @@ time_between_ticks = 250
 name = "my-counter-source"
 type = "counter"
 schedule = "* * * * * * *"
-pipe = ["my-console-sink"]
-key_name = "asdasd"
+pipe = ["my-keymap->my-console-sink"]
+key_name = "old_key"
 
 [[sinks]]
 name = "my-console-sink"
 type = "console"
 prefix = "::"
+
+[[processors]]
+name = "my-keymap"
+type = "keymap"
+from_key = "old_key"
+to_key = "new_key"

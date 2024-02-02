@@ -10,8 +10,9 @@ use std::{
 
 use chrono::Local;
 use clap::Parser;
+use crossbeam::channel::Sender;
 use log::{debug, error, warn, LevelFilter};
-use tap::TapFallible;
+use tap::{TapFallible, TapOptional};
 
 use crate::sys::Items;
 
@@ -73,8 +74,43 @@ fn main() -> anyhow::Result<()> {
                 .instantiate_sink(&sink.r#type, sink.name, &toml)
                 .unwrap();
             for item in recv {
-                debug!("Sinking items to {}", sink_inst.name());
+                debug!("Sinking items to \"{}\"", sink_inst.name());
                 sink_inst.sink_items(&item);
+            }
+        });
+    }
+
+    let mut processors_map = HashMap::new();
+    for processor in config.processors {
+        if !plugin_manager.processor_available(&processor.r#type) {
+            error!(
+                "Processor type \"{}\" unavailable. Skipping \"{}\"",
+                &processor.r#type, &processor.name
+            );
+            continue;
+        }
+        let Ok(toml) = toml::to_string(&processor).tap_err(|err| debug!("{err}")) else {
+            error!(
+                "Unable to reserialize config for processor {}, skipping.",
+                &processor.name
+            );
+            continue;
+        };
+        if processors_map.contains_key(&processor.name) {
+            warn!("Duplicate processor name {}, skipping.", &processor.name);
+            continue;
+        }
+        let (send, recv) = crossbeam::channel::unbounded::<(Items, Sender<Items>)>(); // TODO bounded
+        processors_map.insert(processor.name.clone(), send);
+        let plugin_manager = plugin_manager.clone();
+
+        thread::spawn(move || {
+            let mut processor_inst = plugin_manager
+                .instantiate_processor(&processor.r#type, processor.name, &toml)
+                .unwrap();
+            for (item, responder) in recv {
+                debug!("Processing items with \"{}\"", processor_inst.name());
+                responder.send(processor_inst.process_items(&item)).unwrap();
             }
         });
     }
@@ -94,17 +130,32 @@ fn main() -> anyhow::Result<()> {
             );
             continue;
         };
-        // TODO: processors
         let mut senders = Vec::new();
-        for pipe in &source.pipe {
-            if let Some(sender) = sinks_map.get(&pipe.sink) {
-                senders.push(sender.clone());
-            } else {
-                warn!(
-                    "Pipeline invalid as sink \"{}\" does not exist. Pipeline: \"{}\"",
-                    &pipe.sink, pipe
-                );
+        'pipeloop: for pipe in &source.pipe {
+            let mut proc_senders = Vec::new();
+            for proc in &pipe.processors {
+                if let Some(sender) = processors_map.get(proc) {
+                    proc_senders.push(sender.clone());
+                } else {
+                    warn!(
+                        "Pipeline invalid as processor {proc} does not exist. Pipeline: \"{pipe}\""
+                    );
+                    continue 'pipeloop;
+                }
             }
+
+            let pipe_senders = sinks_map
+                .get(&pipe.sink)
+                .cloned()
+                .tap_none(|| {
+                    warn!(
+                        "Pipeline invalid as sink \"{}\" does not exist. Pipeline: \"{}\"",
+                        &pipe.sink, pipe
+                    )
+                })
+                .map(|a| (proc_senders, a));
+
+            senders.extend(pipe_senders);
         }
         if senders.is_empty() {
             error!(
@@ -123,9 +174,16 @@ fn main() -> anyhow::Result<()> {
             loop {
                 if next <= Local::now() {
                     next = upcoming.next().unwrap();
-                    let items = source_inst.poll_source();
-                    for send in &senders {
-                        send.send(items.clone()).unwrap();
+                    let source_items = source_inst.poll_source();
+                    for (proc_list, sink) in &senders {
+                        let mut final_items = source_items.clone();
+                        for proc in proc_list {
+                            let (response_sender, response_receiver) =
+                                crossbeam::channel::bounded(0);
+                            proc.send((final_items.clone(), response_sender)).unwrap();
+                            final_items = response_receiver.recv().unwrap();
+                        }
+                        sink.send(final_items).unwrap();
                     }
                 }
                 sleep(Duration::from_millis(config.time_between_ticks as u64));
