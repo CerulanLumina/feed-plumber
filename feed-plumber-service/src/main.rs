@@ -8,13 +8,14 @@ use std::{
     time::Duration,
 };
 
+use crate::config::Pipeline;
 use chrono::Local;
 use clap::Parser;
 use crossbeam::channel::Sender;
 use log::{debug, error, warn, LevelFilter};
 use tap::{TapFallible, TapOptional};
 
-use crate::sys::Items;
+use crate::sys::{FeedPlumberComponentError, Items};
 
 mod args;
 mod config;
@@ -48,6 +49,8 @@ fn main() -> anyhow::Result<()> {
         .unwrap_or(Cow::Borrowed(Path::new("feedplumber.toml")));
     let config = config::load_from_toml(config_path)?;
 
+    let print_plugin_warnings = config.print_plugin_warnings;
+
     let mut sinks_map = HashMap::new();
     for sink in config.sinks {
         if !plugin_manager.sink_available(&sink.r#type) {
@@ -70,9 +73,13 @@ fn main() -> anyhow::Result<()> {
         let plugin_manager = plugin_manager.clone();
 
         thread::spawn(move || {
-            let mut sink_inst = plugin_manager
-                .instantiate_sink(&sink.r#type, sink.name, &toml)
-                .unwrap();
+            let sink_inst = plugin_manager
+                .instantiate_sink(&sink.r#type, sink.name.clone(), &toml)
+                .unwrap()
+                .tap_err(|err| error!("Plugin processor \"{}\" could not be created due to an error. Plugin said: {err}", &sink.name));
+            let Ok(mut sink_inst) = sink_inst else {
+                return;
+            };
             for item in recv {
                 debug!("Sinking items to \"{}\"", sink_inst.name());
                 sink_inst.sink_items(&item);
@@ -100,17 +107,51 @@ fn main() -> anyhow::Result<()> {
             warn!("Duplicate processor name {}, skipping.", &processor.name);
             continue;
         }
-        let (send, recv) = crossbeam::channel::unbounded::<(Items, Sender<Items>)>(); // TODO bounded
+        let (send, recv) = crossbeam::channel::unbounded::<ProcessorMessage>(); // TODO bounded
         processors_map.insert(processor.name.clone(), send);
         let plugin_manager = plugin_manager.clone();
 
         thread::spawn(move || {
-            let mut processor_inst = plugin_manager
-                .instantiate_processor(&processor.r#type, processor.name, &toml)
-                .unwrap();
-            for (item, responder) in recv {
+            let processor_inst = plugin_manager
+                .instantiate_processor(&processor.r#type, processor.name.clone(), &toml)
+                .unwrap()
+                .tap_err(|err| error!("Plugin processor \"{}\" could not be created due to an error. Plugin said: {err}", &processor.name));
+            let Ok(mut processor_inst) = processor_inst else {
+                return;
+            };
+            for ProcessorMessage {
+                incoming,
+                responder,
+            } in recv
+            {
                 debug!("Processing items with \"{}\"", processor_inst.name());
-                responder.send(processor_inst.process_items(&item)).unwrap();
+                let res = processor_inst.process_items(&incoming);
+                let items = match res {
+                    Ok(items) => items,
+                    Err(err) => {
+                        match err {
+                            FeedPlumberComponentError::Warn(err) => {
+                                if print_plugin_warnings {
+                                    warn!("Plugin processor \"{}\" errored while processing items: {err}", processor_inst.name());
+                                }
+                                Items::empty()
+                            }
+                            FeedPlumberComponentError::Fatal(err) => {
+                                error!(
+                                    "Plugin processor \"{}\" errored while processing items: {err}",
+                                    processor_inst.name()
+                                );
+                                return;
+                            }
+                        }
+                    }
+                };
+                if responder.send(items).is_err() {
+                    error!(
+                        "Processor \"{}\" responding to source that has hung up!",
+                        processor_inst.name()
+                    );
+                }
             }
         });
     }
@@ -131,7 +172,7 @@ fn main() -> anyhow::Result<()> {
             continue;
         };
         let mut senders = Vec::new();
-        'pipeloop: for pipe in &source.pipe {
+        'pipeloop: for pipe in source.pipe {
             let mut proc_senders = Vec::new();
             for proc in &pipe.processors {
                 if let Some(sender) = processors_map.get(proc) {
@@ -153,7 +194,11 @@ fn main() -> anyhow::Result<()> {
                         &pipe.sink, pipe
                     )
                 })
-                .map(|a| (proc_senders, a));
+                .map(|a| ConstructedPipeline {
+                    processors: proc_senders,
+                    sink: a,
+                    original: pipe,
+                });
 
             senders.extend(pipe_senders);
         }
@@ -166,24 +211,71 @@ fn main() -> anyhow::Result<()> {
         }
         let pm = plugin_manager.clone();
         thread::spawn(move || {
-            let mut source_inst = pm
-                .instantiate_source(&source.r#type, source.name, &toml)
-                .unwrap();
+            let mut errored = Vec::new();
+            let source_inst = pm
+                .instantiate_source(&source.r#type, source.name.clone(), &toml)
+                .unwrap()
+                .tap_err(|err| error!("Plugin source \"{}\" could not be created due to an error. Plugin said: {err}", &source.name));
+            let Ok(mut source_inst) = source_inst else {
+                return;
+            };
             let mut upcoming = source.schedule.upcoming(Local);
             let mut next = upcoming.next().unwrap();
             loop {
                 if next <= Local::now() {
                     next = upcoming.next().unwrap();
                     let source_items = source_inst.poll_source();
-                    for (proc_list, sink) in &senders {
-                        let mut final_items = source_items.clone();
-                        for proc in proc_list {
-                            let (response_sender, response_receiver) =
-                                crossbeam::channel::bounded(0);
-                            proc.send((final_items.clone(), response_sender)).unwrap();
-                            final_items = response_receiver.recv().unwrap();
+                    let source_items = match source_items {
+                        Ok(source_items) => source_items,
+                        Err(err) => match err {
+                            FeedPlumberComponentError::Warn(err) => {
+                                if print_plugin_warnings {
+                                    warn!("Plugin source \"{}\" has errored while polling items. Skipping this batch. Plugin said {err}", &source.name);
+                                }
+                                Items::empty()
+                            }
+                            FeedPlumberComponentError::Fatal(err) => {
+                                error!("Plugin source \"{}\" has errored while polling items. Disabling source. Plugin said {err}", &source.name);
+                                return;
+                            }
+                        },
+                    };
+                    if !source_items.is_empty() {
+                        'pipeline: for (idx, pipe) in senders.iter().enumerate() {
+                            if errored.contains(&idx) {
+                                continue;
+                            }
+                            let mut final_items = source_items.clone();
+                            for (idx, proc) in pipe.processors.iter().enumerate() {
+                                let (response_sender, response_receiver) =
+                                    crossbeam::channel::bounded(0);
+                                match proc.send(ProcessorMessage {
+                                    incoming: final_items.clone(),
+                                    responder: response_sender,
+                                }) {
+                                    Ok(_) => {
+                                        final_items = response_receiver.recv().unwrap();
+                                        if final_items.is_empty() {
+                                            continue 'pipeline;
+                                        }
+                                    }
+                                    Err(_) => {
+                                        errored.push(idx);
+                                        warn!("Pipeline \"{}\" on source \"{}\" has errored. Skipping for future polls.", &pipe.original, &source.name);
+                                        continue 'pipeline;
+                                    }
+                                }
+                            }
+                            if final_items.is_empty() {
+                                continue 'pipeline;
+                            }
+                            if pipe.sink.send(final_items).is_err() {
+                                warn!("Pipeline \"{}\" on source \"{}\" has errored. Skipping for future polls.", &pipe.original, &source.name);
+                                errored.push(idx);
+                            }
                         }
-                        sink.send(final_items).unwrap();
+                    } else {
+                        debug!("Source \"{}\" returned no items.", &source.name);
                     }
                 }
                 sleep(Duration::from_millis(config.time_between_ticks as u64));
@@ -192,4 +284,15 @@ fn main() -> anyhow::Result<()> {
     }
     drop(condvar.wait(mutex_guard).unwrap());
     Ok(())
+}
+
+struct ConstructedPipeline {
+    processors: Vec<Sender<ProcessorMessage>>,
+    sink: Sender<Items>,
+    original: Pipeline,
+}
+
+struct ProcessorMessage {
+    incoming: Items,
+    responder: Sender<Items>,
 }

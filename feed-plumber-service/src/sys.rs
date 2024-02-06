@@ -51,7 +51,7 @@ impl Plugin {
         r#type: &str,
         name: String,
         config: &str,
-    ) -> Option<PluginSourceInstance> {
+    ) -> Option<Result<PluginSourceInstance, String>> {
         self.sources
             .get(r#type)
             .map(|a| a.instantiate_new(name, config))
@@ -62,7 +62,7 @@ impl Plugin {
         r#type: &str,
         name: String,
         config: &str,
-    ) -> Option<PluginSinkInstance> {
+    ) -> Option<Result<PluginSinkInstance, String>> {
         self.sinks
             .get(r#type)
             .map(|a| a.instantiate_new(name, config))
@@ -73,7 +73,7 @@ impl Plugin {
         r#type: &str,
         name: String,
         config: &str,
-    ) -> Option<PluginProcessorInstance> {
+    ) -> Option<Result<PluginProcessorInstance, String>> {
         self.processors
             .get(r#type)
             .map(|a| a.instantiate_new(name, config))
@@ -160,22 +160,65 @@ unsafe fn slice_from_ptr<'a, T>(ptr: *const T, mut len: usize) -> &'a [T] {
     from_raw_parts(ptr, len)
 }
 
+pub enum FeedPlumberComponentError {
+    Warn(String),
+    Fatal(String),
+}
+
+fn items_with_error_to_result(mut items: Items) -> Result<Items, FeedPlumberComponentError> {
+    match items
+        .0
+        .get_mut(0)
+        .and_then(|a| a.get_mut(0))
+        .and_then(|(key, value)| {
+            if key == "FEED_PLUMBER_FATAL" {
+                Some(FeedPlumberComponentError::Fatal(std::mem::take(value)))
+            } else if key == "FEED_PLUMBER_WARN" {
+                Some(FeedPlumberComponentError::Warn(std::mem::take(value)))
+            } else {
+                None
+            }
+        }) {
+        Some(err) => Err(err),
+        None => Ok(items),
+    }
+}
+
+macro_rules! plugin_component_instantiation {
+    ($typ:tt,$comp_name:ident,$config:ident,$inner:expr => $human_name:literal) => {{
+        let config = CString::new($config).unwrap();
+        // Safety: FFI
+        let res = unsafe { ($inner.create)(config.as_ptr()) };
+        drop(config); // Ensures config lives at least as long as FFI
+        if !res.handle.is_null() {
+            Ok($typ {
+                name: $comp_name,
+                handle: res.handle,
+                meta: $inner,
+            })
+        } else {
+            if !res.message.is_null() {
+                let cstr = unsafe { CStr::from_ptr(res.message) };
+                Err(cstr.to_string_lossy().into_owned())
+            } else {
+                Err(concat!("Unknown error during ", $human_name, " creation").to_owned())
+            }
+        }
+    }};
+}
+
 pub struct PluginSourceMeta {
     pub name: String,
     inner: FeedPlumberSourceMeta,
 }
 
 impl PluginSourceMeta {
-    pub fn instantiate_new(&self, name: String, config: &str) -> PluginSourceInstance {
-        let config = CString::new(config).unwrap();
-        // Safety: FFI
-        let handle = unsafe { (self.inner.create)(config.as_ptr()) };
-        drop(config); // Ensures config lives at least as long as FFI
-        PluginSourceInstance {
-            name,
-            handle,
-            meta: self.inner,
-        }
+    pub fn instantiate_new(
+        &self,
+        name: String,
+        config: &str,
+    ) -> Result<PluginSourceInstance, String> {
+        plugin_component_instantiation!(PluginSourceInstance, name, config, self.inner => "source")
     }
 }
 
@@ -196,8 +239,9 @@ impl PluginSourceInstance {
         unsafe { (self.meta.poll_source)(self.handle) }
     }
 
-    pub fn poll_source(&mut self) -> Items {
-        Items::from_raw(self.poll_source_raw())
+    pub fn poll_source(&mut self) -> Result<Items, FeedPlumberComponentError> {
+        let items = Items::from_raw(self.poll_source_raw());
+        items_with_error_to_result(items)
     }
 }
 
@@ -207,16 +251,12 @@ pub struct PluginSinkMeta {
 }
 
 impl PluginSinkMeta {
-    pub fn instantiate_new(&self, name: String, config: &str) -> PluginSinkInstance {
-        let config = CString::new(config).unwrap();
-        // Safety: FFI
-        let handle = unsafe { (self.inner.create)(config.as_ptr()) };
-        drop(config); // Ensures config lives at least as long as FFI
-        PluginSinkInstance {
-            name,
-            handle,
-            meta: self.inner,
-        }
+    pub fn instantiate_new(
+        &self,
+        name: String,
+        config: &str,
+    ) -> Result<PluginSinkInstance, String> {
+        plugin_component_instantiation!(PluginSinkInstance, name, config, self.inner => "sink")
     }
 }
 
@@ -248,16 +288,12 @@ pub struct PluginProcessorMeta {
 }
 
 impl PluginProcessorMeta {
-    pub fn instantiate_new(&self, name: String, config: &str) -> PluginProcessorInstance {
-        let config = CString::new(config).unwrap();
-        // Safety: FFI
-        let handle = unsafe { (self.inner.create)(config.as_ptr()) };
-        drop(config); // Ensures config lives at least as long as FFI
-        PluginProcessorInstance {
-            name,
-            handle,
-            meta: self.inner,
-        }
+    pub fn instantiate_new(
+        &self,
+        name: String,
+        config: &str,
+    ) -> Result<PluginProcessorInstance, String> {
+        plugin_component_instantiation!(PluginProcessorInstance, name, config, self.inner => "processor")
     }
 }
 
@@ -276,13 +312,14 @@ impl PluginProcessorInstance {
         unsafe { (self.meta.process_items)(self.handle, items) }
     }
 
-    pub fn process_items(&mut self, items: &Items) -> Items {
+    pub fn process_items(&mut self, items: &Items) -> Result<Items, FeedPlumberComponentError> {
         let cell = OnceCell::new();
         items.with_raw(|items| {
             let items = self.process_items_raw(items);
             cell.set(Items::from_raw(items)).ok().unwrap();
         });
-        cell.into_inner().unwrap()
+        let items = cell.into_inner().unwrap();
+        items_with_error_to_result(items)
     }
 }
 
@@ -293,6 +330,14 @@ impl Items {
     #[allow(dead_code)]
     pub fn items(&self) -> impl Iterator<Item = &Vec<(String, String)>> {
         self.0.iter()
+    }
+
+    pub fn empty() -> Self {
+        Items(Vec::new())
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
     }
 
     fn from_raw(raw: ItemsRaw) -> Self {

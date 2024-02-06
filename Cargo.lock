@@ -309,6 +309,7 @@ dependencies = [
 name = "feed-plumber-plugin-rs"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
  "cstr",
  "serde",
  "sys-feed-plumber-plugin",

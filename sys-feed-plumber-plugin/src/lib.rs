@@ -63,7 +63,7 @@ unsafe impl Send for FeedPlumberPlugin {}
 #[derive(Copy, Clone)]
 pub struct FeedPlumberSourceMeta {
     pub name: StaticString,
-    pub create: unsafe extern "C" fn(*const c_char) -> *mut c_void,
+    pub create: unsafe extern "C" fn(*const c_char) -> CreationResult,
     pub poll_source: unsafe extern "C" fn(*mut c_void) -> Items,
 }
 
@@ -71,7 +71,7 @@ pub struct FeedPlumberSourceMeta {
 #[derive(Copy, Clone)]
 pub struct FeedPlumberSinkMeta {
     pub name: StaticString,
-    pub create: unsafe extern "C" fn(*const c_char) -> *mut c_void,
+    pub create: unsafe extern "C" fn(*const c_char) -> CreationResult,
     pub sink_items: unsafe extern "C" fn(*mut c_void, Items),
 }
 
@@ -79,6 +79,14 @@ pub struct FeedPlumberSinkMeta {
 #[derive(Copy, Clone)]
 pub struct FeedPlumberProcessorMeta {
     pub name: StaticString,
-    pub create: unsafe extern "C" fn(*const c_char) -> *mut c_void,
+    pub create: unsafe extern "C" fn(*const c_char) -> CreationResult,
     pub process_items: unsafe extern "C" fn(*mut c_void, Items) -> Items,
+}
+
+#[repr(C)]
+#[derive(Copy, Clone)]
+pub struct CreationResult {
+    pub handle: *mut c_void,
+    pub message: *mut c_char,
+    pub destroy_message: unsafe extern "C" fn(*mut c_char),
 }

@@ -38,16 +38,18 @@ struct CounterSource {
 impl FeedPlumberSource for CounterSource {
     type ConfigType = CounterSourceConfig;
 
-    fn new(config: Self::ConfigType) -> Self {
-        CounterSource {
+    fn new(config: Self::ConfigType) -> feed_plumber_plugin_rs::anyhow::Result<Self> {
+        Ok(CounterSource {
             key: config.key_name,
             count: 0,
-        }
+        })
     }
 
-    fn poll_source(&mut self) -> Vec<Vec<(String, String)>> {
+    fn poll_source(
+        &mut self,
+    ) -> feed_plumber_plugin_rs::anyhow::Result<Vec<Vec<(String, String)>>> {
         self.count += 1;
-        vec![vec![(self.key.clone(), format!("{}", self.count))]]
+        Ok(vec![vec![(self.key.clone(), format!("{}", self.count))]])
     }
 }
 
@@ -59,11 +61,11 @@ struct ConsoleSink {
 impl FeedPlumberSink for ConsoleSink {
     type ConfigType = ConsoleSinkConfig;
 
-    fn new(config: Self::ConfigType) -> Self {
-        Self {
+    fn new(config: Self::ConfigType) -> feed_plumber_plugin_rs::anyhow::Result<Self> {
+        Ok(Self {
             sequence: 1,
             prefix: config.prefix,
-        }
+        })
     }
 
     fn sink_items(&mut self, items: Vec<Vec<(&str, &str)>>) {
@@ -86,14 +88,17 @@ struct KeyMapProcessor {
 impl FeedPlumberProcessor for KeyMapProcessor {
     type ConfigType = HashMap<String, Value>;
 
-    fn new(config: Self::ConfigType) -> Self {
+    fn new(config: Self::ConfigType) -> feed_plumber_plugin_rs::anyhow::Result<Self> {
         let from = config.get("from_key").unwrap().as_str().unwrap().to_owned();
         let to = config.get("to_key").unwrap().as_str().unwrap().to_owned();
-        Self { from, to }
+        Ok(Self { from, to })
     }
 
-    fn process_items(&mut self, items: Vec<Vec<(&str, &str)>>) -> Vec<Vec<(String, String)>> {
-        items
+    fn process_items(
+        &mut self,
+        items: Vec<Vec<(&str, &str)>>,
+    ) -> feed_plumber_plugin_rs::anyhow::Result<Vec<Vec<(String, String)>>> {
+        Ok(items
             .into_iter()
             .map(|item| {
                 item.into_iter()
@@ -107,6 +112,6 @@ impl FeedPlumberProcessor for KeyMapProcessor {
                     })
                     .collect()
             })
-            .collect()
+            .collect())
     }
 }

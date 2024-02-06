@@ -83,7 +83,7 @@ impl PluginManager {
         r#type: &str,
         name: String,
         config: &str,
-    ) -> Option<PluginSourceInstance> {
+    ) -> Option<Result<PluginSourceInstance, String>> {
         let plugin = self
             .plugins
             .iter()
@@ -103,7 +103,7 @@ impl PluginManager {
         r#type: &str,
         name: String,
         config: &str,
-    ) -> Option<PluginSinkInstance> {
+    ) -> Option<Result<PluginSinkInstance, String>> {
         let plugin = self
             .plugins
             .iter()
@@ -121,7 +121,7 @@ impl PluginManager {
         r#type: &str,
         name: String,
         config: &str,
-    ) -> Option<PluginProcessorInstance> {
+    ) -> Option<Result<PluginProcessorInstance, String>> {
         let plugin = self
             .plugins
             .iter()

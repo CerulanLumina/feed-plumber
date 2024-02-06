@@ -9,5 +9,5 @@ crate-type = ["cdylib"]
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-feed-plumber-plugin-rs = { path = "../feed-plumber-plugin-rs" }
+feed-plumber-plugin-rs = { path = "../feed-plumber-plugin-rs", features = ["deserialize"] }
 serde = { version = "1.0.196", features = ["derive"] }

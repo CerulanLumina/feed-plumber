@@ -10,6 +10,8 @@ pub use toml;
 #[cfg(feature = "deserialize")]
 pub use serde;
 
+pub use anyhow;
+
 pub mod sys {
     pub use cstr::cstr;
 
@@ -207,7 +209,13 @@ macro_rules! feed_plumber_plugin {
 pub unsafe extern "C" fn source_poll_source<T: FeedPlumberSource>(handle: *mut c_void) -> Items {
     let source = &mut *(handle as *mut T);
     let pairs = source.poll_source();
-    vec_to_items(pairs)
+    match pairs {
+        Ok(pairs) => vec_to_items(pairs),
+        Err(err) => vec_to_items(vec![vec![(
+            "FEED_PLUMBER_ERROR".to_owned(),
+            format!("{err}"),
+        )]]),
+    }
 }
 
 pub unsafe extern "C" fn sink_sink_items<T: FeedPlumberSink>(handle: *mut c_void, items: Items) {
@@ -220,32 +228,72 @@ pub unsafe extern "C" fn processor_process_items<T: FeedPlumberProcessor>(
     items: Items,
 ) -> Items {
     let processor = &mut *(handle as *mut T);
-    vec_to_items(processor.process_items(items_to_vec(items)))
+    let pairs = processor.process_items(items_to_vec(items));
+    match pairs {
+        Ok(pairs) => vec_to_items(pairs),
+        Err(err) => vec_to_items(vec![vec![(
+            "FEED_PLUMBER_WARN".to_owned(),
+            format!("{err}"),
+        )]]),
+    }
 }
 
-pub mod raw {
+#[macro_export]
+macro_rules! feed_plumber_fatal {
+    ($msg:expr) => {
+        return Ok(vec![vec![("FEED_PLUMBER_FATAL", format!("{}", $msg))]]);
+    };
+}
+
+pub(crate) mod raw {
     use std::{
         ffi::{c_char, CStr, CString},
         mem::forget,
+        ptr::null_mut,
     };
 
-    use sys_feed_plumber_plugin::{Item, Items, KeyValuePair};
+    use sys_feed_plumber_plugin::{CreationResult, Item, Items, KeyValuePair};
+
+    pub fn result_to_creation_result<T>(result: anyhow::Result<T>) -> CreationResult {
+        match result {
+            Ok(v) => CreationResult {
+                handle: Box::into_raw(Box::new(v)) as _,
+                message: null_mut(),
+                destroy_message: destroy_string,
+            },
+            Err(err) => CreationResult {
+                handle: null_mut(),
+                message: string_to_pointer(format!("{err}")),
+                destroy_message: destroy_string,
+            },
+        }
+    }
 
     pub unsafe extern "C" fn pair_destroy(ptr1: *mut c_char, ptr2: *mut c_char) {
-        drop(CString::from_raw(ptr1));
-        drop(CString::from_raw(ptr2));
+        destroy_string(ptr1);
+        destroy_string(ptr2);
     }
 
     pub unsafe extern "C" fn item_destroy(ptr: *mut KeyValuePair, len: usize) {
-        drop(Vec::from_raw_parts(ptr, len, len));
+        if !ptr.is_null() {
+            drop(Vec::from_raw_parts(ptr, len, len));
+        }
     }
 
     pub unsafe extern "C" fn items_destroy(ptr: *mut Item, len: usize) {
-        drop(Vec::from_raw_parts(ptr, len, len));
+        if !ptr.is_null() {
+            drop(Vec::from_raw_parts(ptr, len, len));
+        }
     }
 
     pub fn string_to_pointer(a: String) -> *mut c_char {
         CString::new(a).unwrap().into_raw()
+    }
+
+    pub unsafe extern "C" fn destroy_string(ptr: *mut c_char) {
+        if !ptr.is_null() {
+            drop(CString::from_raw(ptr))
+        }
     }
 
     pub fn dual_string_to_pointer(a: (String, String)) -> (*mut c_char, *mut c_char) {

@@ -21,6 +21,8 @@ const DEFAULT_TIME_BETWEEN_TICKS: usize = 60000;
 pub struct Config {
     #[serde(default = "default_time_between_ticks")]
     pub time_between_ticks: usize,
+    #[serde(default)]
+    pub print_plugin_warnings: bool,
     #[serde(default = "Vec::new")]
     pub sources: Vec<Source>,
     #[serde(default = "Vec::new")]
