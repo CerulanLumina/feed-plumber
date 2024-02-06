@@ -4,6 +4,7 @@ members = [
     "sample-plugin",
     "feed-plumber-plugin-rs",
     "feed-plumber-service",
+    "plugins/feed-plumber-rss"
 ]
 resolver = "2"
 

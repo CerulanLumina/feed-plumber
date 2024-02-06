@@ -1,0 +1,18 @@
+[package]
+name = "feed-plumber-rss"
+version = "0.1.0"
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+feed-plumber-plugin-rs = { path = "../../feed-plumber-plugin-rs" }
+serde = { version = "1.0.196", features = ["derive"] }
+feed-rs = "1.4.0"
+reqwest = { version = "0.11.24", features = ["blocking"] }
+anyhow = "1.0.79"
+rmp-serde = "1.1.2"
+miniz_oxide = "0.7.2"
