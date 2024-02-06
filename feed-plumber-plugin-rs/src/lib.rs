@@ -240,8 +240,11 @@ pub unsafe extern "C" fn processor_process_items<T: FeedPlumberProcessor>(
 
 #[macro_export]
 macro_rules! feed_plumber_fatal {
-    ($msg:expr) => {
-        return Ok(vec![vec![("FEED_PLUMBER_FATAL", format!("{}", $msg))]]);
+    ($msg:tt) => {
+        return Ok(vec![vec![(
+            "FEED_PLUMBER_FATAL".to_owned(),
+            format!("{}", format_args!($msg)),
+        )]]);
     };
 }
 
